@@ -51,6 +51,7 @@ Experimental results show that R2T2 achieves state-of-the-art (SOTA) performance
   - [Accuracy](#accuracy)
     - [English](#english)
     - [Chinese](#chinese)
+- [Model Checkpoints](#model-checkpoints)
 - [Installation](#installation)
   - [Clone the repository](#clone-the-repository)
   - [Option 1: Conda](#option-1-conda)
@@ -62,8 +63,10 @@ Experimental results show that R2T2 achieves state-of-the-art (SOTA) performance
 - [Quick Start](#quick-start)
   - [Configuration](#configuration)
 - [Python API](#python-api)
-  - [Offline transcription (vLLM backend)](#offline-transcription-vllm-backend)
-  - [Streaming transcription (vLLM backend)](#streaming-transcription-vllm-backend)
+  - [vLLM backend](#vllm-backend)
+    - [Offline transcription](#offline-transcription-vllm-backend)
+    - [Streaming transcription](#streaming-transcription-vllm-backend)
+  - [llama.cpp backend](#llamacpp-backend)
 - [WebSocket Server](#websocket-server)
   - [Start and stop the server](#start-and-stop-the-server)
   - [WebSocket endpoint](#websocket-endpoint)
@@ -101,7 +104,7 @@ Experimental results show that R2T2 achieves state-of-the-art (SOTA) performance
 
 ### Additional resources
 
-More demonstrations, comparisons, and supporting resources will be added here.
+More demonstrations and comparisons are available at [r2t2.youdao.com/examples](https://r2t2.youdao.com/examples/), covering chunk size, context and hotwords, code-switch, languages, noise, long-form speech.
 
 ## Evaluation
 
@@ -362,6 +365,16 @@ English results use WER (%), and Chinese results use CER (%); lower is better.
 </tr>
 </tbody></table></div>
 
+## Model Checkpoints
+
+The model weights are published on Hugging Face and ModelScope. Choose the
+checkpoint that matches the inference backend:
+
+| Inference backend | Model | Hugging Face | ModelScope | Description |
+| ----------------- | ----- | ------------ | ---------- | ----------- |
+| vLLM | `Confucius4-R2T2` | <a href="https://huggingface.co/netease-youdao/Confucius4-R2T2" title="Open Confucius4-R2T2 on Hugging Face"><img src="https://cdn.simpleicons.org/huggingface/FFCC4D" alt="Hugging Face" width="18" height="18"></a> | <a href="https://modelscope.cn/models/netease-youdao/Confucius4-R2T2" title="Open Confucius4-R2T2 on ModelScope"><img src="https://cdn.simpleicons.org/modelscope/624AFF" alt="ModelScope" width="18" height="18"></a> | Standard checkpoint for the vLLM backend |
+| llama.cpp | `Confucius4-R2T2-GGUF` | <a href="https://huggingface.co/netease-youdao/Confucius4-R2T2-GGUF" title="Open Confucius4-R2T2-GGUF on Hugging Face"><img src="https://cdn.simpleicons.org/huggingface/FFCC4D" alt="Hugging Face" width="18" height="18"></a> | <a href="https://modelscope.cn/models/netease-youdao/Confucius4-R2T2-GGUF" title="Open Confucius4-R2T2-GGUF on ModelScope"><img src="https://cdn.simpleicons.org/modelscope/624AFF" alt="ModelScope" width="18" height="18"></a> | GGUF repository with several quantization variants |
+
 ## Installation
 
 We recommend using a **fresh, isolated environment**. For local development and
@@ -483,17 +496,18 @@ You can also call `example.py` directly and pass any of these as flags (`--audio
 ## Python API
 
 Audio inputs can be passed as a local path, a URL, base64 data, or a `(np.ndarray, sr)` tuple. Batched inference is supported. Remember to wrap vLLM code under `if __name__ == '__main__':` to avoid the `spawn` error described in [vLLM Troubleshooting](https://docs.vllm.ai/en/latest/usage/troubleshooting/#python-multiprocessing).
-
-### Offline transcription (vLLM backend)
+### vLLM backend
+#### Offline transcription
 
 ```python
 import librosa
-from qwen_asr import Qwen3ASRModel
+from r2t2 import R2T2ASRModel
 
 if __name__ == "__main__":
-    asr = Qwen3ASRModel.LLM(
+    asr = R2T2ASRModel.LLM(
         model="/path/to/Confucius4-R2T2",
         gpu_memory_utilization=0.5,
+        max_model_len=16384,
         max_inference_batch_size=32,
         max_new_tokens=4096,
     )
@@ -508,16 +522,17 @@ if __name__ == "__main__":
     print(results[0].language, results[0].text)
 ```
 
-### Streaming transcription (vLLM backend)
+#### Streaming transcription
 
 ```python
 import librosa
-from qwen_asr import Qwen3ASRModel
+from r2t2 import R2T2ASRModel
 
 if __name__ == "__main__":
-    asr = Qwen3ASRModel.LLM(
+    asr = R2T2ASRModel.LLM(
         model="/path/to/Confucius4-R2T2",
         gpu_memory_utilization=0.4,
+        max_model_len=16384,
         max_new_tokens=4,           # keep small for low-latency streaming
     )
 
@@ -534,7 +549,7 @@ if __name__ == "__main__":
     step = int(0.16 * 16000)
     for pos in range(0, len(wav), step):
         seg = wav[pos : pos + step]
-        _, text = asr.streaming_transcribe(seg, state, max_new_tokens=2)
+        _, text = asr.streaming_transcribe(seg, state, max_new_tokens=4)
         print("text:", text)
 
     asr.finish_streaming_transcribe(state)
@@ -542,6 +557,26 @@ if __name__ == "__main__":
 ```
 
 For a complete streaming example with adaptive `max_new_tokens` and initial-chunk lookahead handling, see [`example.py`](./example.py).
+
+### llama.cpp backend
+
+The [`r2t2_llama/`](./r2t2_llama) package adds decoding support for deployments where a llama.cpp runtime is preferred. Three routes are available:
+
+| Mode | Audio encoder | Decoder |
+| --- | --- | --- |
+| `stream_llama_hybrid` | vLLM-native encoder (PyTorch) | llama.cpp |
+| `stream_llama` | llama.cpp | llama.cpp |
+| `onetime_llama` | llama.cpp | llama.cpp |
+
+```bash
+GGUF_DIR=/path/to/gguf python -m r2t2_llama.example_llama \
+    --audio resources/test.wav \
+    --model_path /path/to/Confucius4-R2T2 \
+    --infer_mode stream_llama_hybrid
+```
+
+Prebuilt CUDA artifacts for CPython 3.12 ship in the package, so no llama.cpp checkout is needed to run it. See [`r2t2_llama/README.md`](./r2t2_llama/README.md) for the pinned llama.cpp version, the Python API, and rebuild instructions.
+
 
 ## WebSocket Server
 
@@ -675,7 +710,7 @@ For high-concurrency, production-grade, domestically deployable, or private depl
 
 ### GitHub Issues
 
-We also welcome discussions in this repository’s [Issues](https://github.com/netease-youdao/Confucius4-R2T2/issues) section. Feel free to ask questions, report bugs, or suggest improvements!
+We also welcome discussions in this repository's [Issues](https://github.com/netease-youdao/Confucius4-R2T2/issues) section. Feel free to ask questions, report bugs, or suggest improvements!
 
 ---
 

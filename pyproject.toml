@@ -108,3 +108,13 @@ Issues = "https://github.com/<org>/confucius4-r2t2/issues"
 [tool.setuptools.packages.find]
 include = ["r2t2*"]
 exclude = ["tests*", "examples*"]
+
+# The optional `r2t2_llama` package ships prebuilt llama.cpp artifacts: the
+# pybind11 extension in `native/` and the llama.cpp shared libraries in `bin/`.
+# They are release products rather than build output, so they must be installed
+# alongside the Python sources. Library lookup uses relative `$ORIGIN` RPATHs,
+# so the installed layout works without LD_LIBRARY_PATH. Version pins and
+# rebuild instructions are in r2t2_llama/README.md.
+[tool.setuptools.package-data]
+"r2t2_llama" = ["bin/*.so", "bin/*.so.*", "CMakeLists.txt", "native_ext.cpp", "README.md"]
+"r2t2_llama.native" = ["*.so"]

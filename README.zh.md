@@ -51,6 +51,7 @@ R2T2 是 Real Real-Time Transcription（真正实时转写）的缩写，构建�
   - [准确率](#准确率)
     - [英文](#英文)
     - [中文](#中文)
+- [模型权重](#模型权重)
 - [安装](#安装)
   - [克隆仓库](#克隆仓库)
   - [方式 1: Conda](#方式-1-conda)
@@ -62,8 +63,10 @@ R2T2 是 Real Real-Time Transcription（真正实时转写）的缩写，构建�
 - [快速开始](#快速开始)
   - [配置](#配置)
 - [Python API](#python-api)
-  - [离线转写（vLLM 后端）](#离线转写vllm-后端)
-  - [流式转写（vLLM 后端）](#流式转写vllm-后端)
+  - [vLLM 后端](#vLLM-后端)
+    - [离线转写](#离线转写)
+    - [流式转写](#流式转写)
+  - [llama.cpp 后端](#llamacpp-后端)
 - [WebSocket 服务](#websocket-服务)
   - [启动与停止服务](#启动与停止服务)
   - [WebSocket 端点](#websocket-端点)
@@ -106,7 +109,7 @@ R2T2 是 Real Real-Time Transcription（真正实时转写）的缩写，构建�
 
 ### 其他资源
 
-更多演示、对比和相关资源将在此处持续添加。
+更多演示与对比可在 [r2t2.youdao.com/examples](https://r2t2.youdao.com/examples/) 查看，涵盖分块大小、上下文与热词、中英混说、多语种、噪声、长语音等场景。
 
 ## 评测
 
@@ -367,6 +370,14 @@ R2T2 是 Real Real-Time Transcription（真正实时转写）的缩写，构建�
 </tr>
 </tbody></table></div>
 
+## 模型权重
+
+模型权重目前已发布在Hugging Face和ModelScope平台，可根据具体需要下载对应模型：
+
+| Inference backend | Model | Hugging Face | ModelScope | Description |
+| ----------------- | ----- | ------------ | ---------- | ----------- |
+| vLLM | `Confucius4-R2T2` | <a href="https://huggingface.co/netease-youdao/Confucius4-R2T2" title="Open Confucius4-R2T2 on Hugging Face"><img src="https://cdn.simpleicons.org/huggingface/FFCC4D" alt="Hugging Face" width="18" height="18"></a> | <a href="https://modelscope.cn/models/netease-youdao/Confucius4-R2T2" title="Open Confucius4-R2T2 on ModelScope"><img src="https://cdn.simpleicons.org/modelscope/624AFF" alt="ModelScope" width="18" height="18"></a> | Standard checkpoint for the vLLM backend |
+| llama.cpp | `Confucius4-R2T2-GGUF` | <a href="https://huggingface.co/netease-youdao/Confucius4-R2T2-GGUF" title="Open Confucius4-R2T2-GGUF on Hugging Face"><img src="https://cdn.simpleicons.org/huggingface/FFCC4D" alt="Hugging Face" width="18" height="18"></a> | <a href="https://modelscope.cn/models/netease-youdao/Confucius4-R2T2-GGUF" title="Open Confucius4-R2T2-GGUF on ModelScope"><img src="https://cdn.simpleicons.org/modelscope/624AFF" alt="ModelScope" width="18" height="18"></a> | GGUF repository with several quantization variants |
 
 ## 安装
 
@@ -485,7 +496,8 @@ docker rm -f confucius4-r2t2
 
 音频输入可以是本地路径、URL、Base64 数据，或 `(np.ndarray, sr)` 元组。支持批量推理。请记得将 vLLM 代码放在 `if __name__ == '__main__':` 保护块中，以避免 [vLLM 故障排查文档](https://docs.vllm.ai/en/latest/usage/troubleshooting/#python-multiprocessing)中所述的 `spawn` 错误。
 
-### 离线转写（vLLM 后端）
+### vLLM 后端
+#### 离线转写
 
 ```python
 import librosa
@@ -509,7 +521,7 @@ if __name__ == "__main__":
     print(results[0].language, results[0].text)
 ```
 
-### 流式转写（vLLM 后端）
+#### 流式转写
 
 ```python
 import librosa
@@ -535,7 +547,7 @@ if __name__ == "__main__":
     step = int(0.16 * 16000)
     for pos in range(0, len(wav), step):
         seg = wav[pos : pos + step]
-        _, text = asr.streaming_transcribe(seg, state, max_new_tokens=2)
+        _, text = asr.streaming_transcribe(seg, state, max_new_tokens=4)
         print("text:", text)
 
     asr.finish_streaming_transcribe(state)
@@ -543,6 +555,25 @@ if __name__ == "__main__":
 ```
 
 如需查看带有自适应 `max_new_tokens` 和首分块前瞻处理的完整流式示例，请参阅 [`example.py`](./example.py)。
+
+### llama.cpp 后端
+
+组件 [`r2t2_llama/`](./r2t2_llama) 提供了基于 llama.cpp后端部署的解码支持。可选的三种模式如下：
+
+| Mode | Audio encoder | Decoder |
+| --- | --- | --- |
+| `stream_llama_hybrid` | vLLM-native encoder (PyTorch) | llama.cpp |
+| `stream_llama` | llama.cpp | llama.cpp |
+| `onetime_llama` | llama.cpp | llama.cpp |
+
+```bash
+GGUF_DIR=/path/to/gguf python -m r2t2_llama.example_llama \
+    --audio resources/test.wav \
+    --model_path /path/to/Confucius4-R2T2 \
+    --infer_mode stream_llama_hybrid
+```
+
+该包已内置面向 CPython 3.12 的预编译 CUDA 组件，无需再单独 checkout llama.cpp 源码即可运行。 具体详情，请阅读 [`r2t2_llama/README.md`](./r2t2_llama/README.md)。
 
 ## WebSocket 服务
 
