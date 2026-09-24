@@ -696,7 +696,7 @@ Join our community to ask questions, share ideas, and connect with other users a
 
 Scan the QR code below to join our WeChat group:
 
-<img src="resources/wechat-qrcode.png" alt="WeChat group QR code" width="200">
+<img src="https://r2t2.youdao.com/wechat_qr" alt="WeChat group QR code" width="200">
 
 ### Discord Server
 

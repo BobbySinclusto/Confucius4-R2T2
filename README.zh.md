@@ -693,7 +693,7 @@ R2T2 针对中文和英文的流式识别进行了优化。除这两种主要语
 
 扫描下方二维码，加入我们的微信群：
 
-<img src="resources/wechat-qrcode.png" alt="微信群二维码" width="200">
+<img src="https://r2t2.youdao.com/wechat_qr" alt="微信群二维码" width="200">
 
 ### Discord 社区
 
