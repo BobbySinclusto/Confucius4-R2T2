@@ -22,17 +22,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 COMPOSE_FILE="docker-compose.web.yml"
-TLS_PROFILE=""
 STATE_FILE=".run_web_tls"
+CMD="${1:-}"
+SHIFTED=("${@:2}")
 
-if [[ -f "$STATE_FILE" ]]; then
+# Whether TLS is part of the stack is remembered between invocations, otherwise
+# `down` would leave the nginx container orphaned (compose only manages the
+# services matching the active profiles).
+TLS_PROFILE=""
+[[ -f "$STATE_FILE" ]] && TLS_PROFILE="tls"
+# Self-heal: adopt a running TLS container even if our state file is stale or
+# missing, so `down` cannot leave nginx orphaned.
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^r2t2-tls$'; then
     TLS_PROFILE="tls"
+    : > "$STATE_FILE"
 fi
-for arg in "$@"; do
-    if [[ "$arg" == "--tls" ]]; then
-        TLS_PROFILE="tls"
-    fi
+WANTS_TLS=0
+for arg in "${SHIFTED[@]}"; do
+    [[ "$arg" == "--tls" ]] && WANTS_TLS=1
 done
+if [[ "$CMD" == "up" || "$CMD" == "start" || "$CMD" == "restart" ]]; then
+    if [[ "$WANTS_TLS" == "1" ]]; then
+        TLS_PROFILE="tls"
+        touch "$STATE_FILE"
+    else
+        # An explicit `up` without --tls means "no TLS layer".
+        TLS_PROFILE=""
+        rm -f "$STATE_FILE"
+    fi
+fi
 
 compose() {
     if [[ -n "$TLS_PROFILE" ]]; then
@@ -54,8 +72,7 @@ lan_url() {
     echo "http://localhost:${ASR_PORT:-8272}/transcript.txt  (plain-text endpoint)"
 }
 
-cmd="${1:-}"
-shift || true
+cmd="$CMD"
 
 case "$cmd" in
     up|start)
@@ -89,8 +106,7 @@ case "$cmd" in
         ;;
     restart)
         "$0" down
-        shift $((OPTIND > 1 ? 1 : 0)) || true
-        "$0" up "$@"
+        "$0" up "${SHIFTED[@]}"
         ;;
     logs)
         compose logs -f
