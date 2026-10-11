@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d1117" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Live transcript</title>
+<!-- Inline blank icon: avoids a 404 in the console on every page load. -->
+<link rel="icon" href="data:image/x-icon;base64,AAABAAEAEBAAAAAAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEABAAAAAAAgAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAzOv/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" />
+<link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+<header>
+  <h1>Live transcript</h1>
+  <span id="status" class="pill" data-state="idle">Idle</span>
+  <span id="metrics" class="metrics" aria-live="off"></span>
+</header>
+
+<div id="notice" role="status" aria-live="polite"></div>
+
+<div id="transcript-wrap">
+  <div id="transcript" class="empty" aria-live="polite" aria-label="Live transcript"
+       data-placeholder="Press Start, then speak. Everything recognized appears here."></div>
+  <button id="jump" type="button">Jump to latest</button>
+</div>
+
+<div class="controls">
+  <button id="toggle" type="button" accesskey="s">Start</button>
+  <div class="secondary">
+    <button id="copy" type="button">Copy</button>
+    <a id="download" class="button" href="./transcript.txt" download="transcript.txt">Text file</a>
+    <button id="clear" type="button">Clear</button>
+    <a id="watch" class="button" href="./?watch=1">Watch only</a>
+  </div>
+</div>
+
+<footer>
+  <span class="session" id="session">no session</span>
+  <a href="./transcript.txt" target="_blank" rel="noopener">plain text endpoint</a>
+  <span id="backend"></span>
+</footer>
+
+<script src="./app.js"></script>
+</body>
+</html>
