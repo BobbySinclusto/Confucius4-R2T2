@@ -47,3 +47,9 @@ htmlcov/
 checkpoints/
 
 
+
+# Web server runtime artifacts
+logs/
+wav_tmp_store/
+.run_web_tls
+service_ws_test

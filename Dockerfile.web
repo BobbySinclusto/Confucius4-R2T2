@@ -1,0 +1,26 @@
+# Web transcription server for Confucius4-R2T2.
+#
+# The upstream runtime image already carries Python 3.10, torch 2.9.1,
+# vllm 0.14.0 and the qwen-asr package (which registers
+# Qwen3ASRForConditionalGeneration in vLLM's model registry), so this layer
+# only adds the two dependencies ws_server.py needs.
+#
+#   docker build -f Dockerfile.web -t r2t2-web .
+#
+# Model weights are mounted at runtime, never baked in (see PLAN.md).
+FROM qwenllm/qwen3-asr:latest
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/work
+
+COPY requirements-web.txt /tmp/requirements-web.txt
+RUN pip install -r /tmp/requirements-web.txt
+
+WORKDIR /work
+EXPOSE 8272
+
+# ASR_MODEL_PATH / VAD_MODEL_PATH come from the environment (see docker-compose.web.yml).
+ENTRYPOINT ["python3", "-u", "ws_server.py"]
+CMD ["--ip", "0.0.0.0", "--port", "8272"]

@@ -1,0 +1,17 @@
+# Keep the build context tiny: checkpoints/ is several GB of weights and is
+# mounted at runtime, never baked into the image.
+checkpoints/
+.git/
+.gitignore
+logs/
+wav_tmp_store/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+nohup*
+service_ws_test
+PLAN.md
+README.zh.md
+resources/

@@ -180,6 +180,34 @@ if not logger.handlers:
     logger.addHandler(_handler)
 logger.propagate = False
 
+# --- Web surface: interactive page + /transcript.txt -------------------------
+# Additive and optional. If the package cannot be imported the process still
+# serves the ASR websocket exactly as upstream does.
+try:
+    from webapp import register_web_routes, transcript_store, wrap_asr_socket
+except Exception as _web_exc:  # pragma: no cover
+    register_web_routes = None
+
+    class _NoopTranscriptStore:
+        @staticmethod
+        def start(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def record(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def finish(*args, **kwargs):
+            return None
+
+    transcript_store = _NoopTranscriptStore()
+
+    def wrap_asr_socket(ws, header=None):
+        return None
+
+    logger.warning("web surface disabled, serving ASR websocket only: %s", _web_exc)
+
 # --- Sanic configuration ---
 Sanic.START_METHOD_SET = True
 # Alternatively switch directly to the safer 'spawn' mode: Sanic.start_method = "spawn"
@@ -264,7 +292,9 @@ async def initialize_models(app):
 
     # 1. Load the VAD model
     vad_config=FireRedStreamVadConfig(
-        use_gpu=True,
+        # The VAD is a 2.4 MB model; running it on the CPU keeps ~200 MB of VRAM
+        # and a CUDA stream free for the ASR engine we share this card with.
+        use_gpu=os.environ.get("VAD_USE_GPU", "0") == "1",
         smooth_window_size=5,
         speech_threshold=0.4,
         pad_start_frame=5,
@@ -281,10 +311,38 @@ async def initialize_models(app):
     logger.info(f"step2: Start loading ASR model from {args.asr_model_path}")
 
     # Streaming is vLLM-only and no forced aligner supported.
+    # vLLM knobs come from the environment. This box is an 8 GB RTX 3070 shared
+    # with ~2 GB of other services during an event, so the hard-coded 0.95 that
+    # used to live here (7.6 GB) cannot fit. R2T2ASRModel.LLM inherits
+    # Qwen3ASRModel.LLM, whose **kwargs go straight to vllm.LLM(model=..., **kwargs),
+    # so these are ordinary vLLM engine options.
+    # Streaming feeds a 16 s audio window, so a prompt is only a few hundred
+    # tokens; capping the model/batch length keeps vLLM's profiling peak (and
+    # therefore its KV reservation) small enough to share an 8 GB card.
+    llm_kwargs = {
+        "gpu_memory_utilization": float(os.environ.get("ASR_GPU_MEM_UTIL", "0.72")),
+        # A streaming prompt is one ~16 s audio window. Qwen3-ASR consumes 1280
+        # samples per token (12.5 tok/s), so 16 s of audio is ~200 tokens plus a
+        # few dozen of text prefix — 1024 is generous, and every token of head-
+        # room here costs KV cache we do not have on a shared 8 GB card.
+        "max_model_len": int(os.environ.get("ASR_MAX_MODEL_LEN", "1024")),
+        "max_num_batched_tokens": int(os.environ.get("ASR_MAX_NUM_BATCHED_TOKENS", "1024")),
+        # vLLM otherwise reserves memory for a worst-case multimodal input; our
+        # audio window is bounded far below that.
+        "skip_mm_profiling": os.environ.get("ASR_SKIP_MM_PROFILING", "1") == "1",
+        # Streaming re-feeds a fresh 16 s sliding audio window on every chunk, so
+        # the multimodal preprocessor cache can only thrash while hashing audio on
+        # the CPU. Off is both cheaper and steadier here.
+        "mm_processor_cache_gb": float(os.environ.get("ASR_MM_CACHE_GB", "0")),
+        # CUDA graphs cost ~0.5-1 GB of VRAM for a ~1 s gain in per-chunk cost;
+        # on a shared 8 GB card eager mode is the safer default.
+        "enforce_eager": os.environ.get("ASR_ENFORCE_EAGER", "1") == "1",
+    }
+    logger.info(f"vLLM engine kwargs: {llm_kwargs}")
     asr_model =  R2T2ASRModel.LLM(
         model=args.asr_model_path,
-        gpu_memory_utilization=0.95, #0.8
         max_new_tokens=1,
+        **llm_kwargs,
     )
 
     logger.info("✅ ASR model initialized successfully")
@@ -388,7 +446,11 @@ def is_last_token_chinese(new_asr_tokens: list) -> bool:
 
 # Current active connection count
 active_connections = 0
-secret_key_list=["test0102"] # only for debug
+# Keys a client header must present. Env-overridable so /api/config can hand
+# the browser a working key without editing vendor code. Note this is a shared
+# secret published to the page by design: it keeps random LAN clients out, it
+# is not authentication.
+secret_key_list = [k.strip() for k in os.environ.get("ASR_SECRET_KEYS", "test0102").split(",") if k.strip()]
 
 @app.websocket("/asr_stream_api_v0")
 async def asr_stream_api_v0(request: Request, ws: Websocket):
@@ -852,6 +914,10 @@ async def asr_stream_api_v1(request: Request, ws: Websocket):
     inference blocks ws.recv().
     """
     global active_connections
+    # Publish this connection's outgoing ASR messages to the transcript store.
+    # Wrapping ws.send once (instead of editing the four send sites below) keeps
+    # this the only line of behaviour in the handler, and cannot miss a site.
+    wrap_asr_socket(ws)
     # Ensure the model has been loaded
     if asr_model is None:
         print("Error: ASR model has not been initialized in the current worker process!")
@@ -1243,6 +1309,7 @@ async def asr_stream_api_v1(request: Request, ws: Websocket):
             _req_logger = logging.getLogger(f"asr_request.{requestId}")
             _req_logger.removeHandler(_req_handler)
             _req_handler.close()
+        transcript_store.finish(requestId)
         await ws.close()
 
 
@@ -1275,6 +1342,19 @@ def args_parser():
     return args
 
 args = args_parser()
+
+# --- Web surface (interactive page + /transcript.txt + /health) --------------
+if register_web_routes is not None:
+    def _web_state():
+        # Read out of this module's globals at request time: asr_model is bound
+        # in the before_server_start listener, active_connections in the handlers.
+        return {
+            "model_ready": asr_model is not None,
+            "active_connections": active_connections,
+        }
+
+    register_web_routes(app, _web_state)
+    logger.info("web surface registered: / /transcript.txt /api/status /api/config /api/stream /health")
 
 # --- Main program entry point ---
 if __name__ == '__main__':

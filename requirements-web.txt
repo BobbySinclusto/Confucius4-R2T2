@@ -1,0 +1,8 @@
+# Extra runtime deps for the web transcription server on top of
+# qwenllm/qwen3-asr:latest (which already provides torch, vllm, qwen-asr,
+# librosa, soundfile, sox, websockets).
+#
+# Pinned to what was validated on 2026-10-10 against the base image
+# (Python 3.10.12, vllm 0.14.0). ws_server.py imports cleanly on sanic 25.x.
+sanic==25.12.1
+fireredvad==0.0.2

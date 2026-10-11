@@ -1,0 +1,78 @@
+# Real-time transcription web server (Confucius4-R2T2).
+#
+#   ./run_web.sh start            ASR + web page on :8272
+#   ./run_web.sh start --tls      also start nginx with TLS on :1443 (needed for
+#                                 microphone access from a phone)
+#
+# Kept separate from the parent repo's docker-compose.yml so this service can be
+# started and restarted without disturbing the TTS/translator containers.
+services:
+  r2t2-web:
+    image: r2t2-web:latest
+    container_name: r2t2-web
+    restart: unless-stopped
+    working_dir: /work
+    volumes:
+      # Code is bind-mounted so a `docker compose restart` picks up edits
+      # without rebuilding; weights stay on the host and out of the image.
+      - ./:/work
+    ports:
+      - "${ASR_PORT:-8272}:8272"
+    environment:
+      ASR_MODEL_PATH: /work/checkpoints/Confucius4-R2T2
+      VAD_MODEL_PATH: /work/checkpoints/vad/Stream-VAD
+      # Memory envelope on an 8 GB card. bf16 weights are 3.8 GiB, and vLLM also
+      # needs room for its profiling peak plus KV cache; 0.62 crashed with
+      # "No available memory for the cache blocks", so the batch/model length
+      # caps below are what buy the headroom rather than raising the ceiling.
+      # NOTE: the TTS/translator stack wants ~2 GB here too, which does not fit
+      # alongside 0.72 — see PLAN.md risk table (fp8 quantization is the lever).
+      ASR_GPU_MEM_UTIL: "${ASR_GPU_MEM_UTIL:-0.72}"
+      ASR_MAX_MODEL_LEN: "${ASR_MAX_MODEL_LEN:-1024}"
+      ASR_MAX_NUM_BATCHED_TOKENS: "${ASR_MAX_NUM_BATCHED_TOKENS:-1024}"
+      ASR_SKIP_MM_PROFILING: "${ASR_SKIP_MM_PROFILING:-1}"
+      ASR_ENFORCE_EAGER: "${ASR_ENFORCE_EAGER:-1}"
+      ASR_MM_CACHE_GB: "${ASR_MM_CACHE_GB:-0}"
+      VAD_USE_GPU: "${VAD_USE_GPU:-0}"
+      ASR_LANGUAGE: "${ASR_LANGUAGE:-English}"
+      ASR_MODE: "${ASR_MODE:-slow}"
+      ASR_SECRET_KEYS: "${ASR_SECRET_KEYS:-test0102}"
+      ASR_BROWSER_SECRET_KEY: "${ASR_BROWSER_SECRET_KEY:-test0102}"
+      # Declare a wedged stream (and therefore a 503 /health) if inference stops
+      # making progress while a client is connected. 0 disables.
+      ASR_STALE_AFTER_SECONDS: "${ASR_STALE_AFTER_SECONDS:-180}"
+      HF_HUB_OFFLINE: "1"
+    # vLLM uses shared memory for tensor transfer; the 64 MB Docker default is
+    # not enough and shows up as a hang during engine startup.
+    shm_size: "4gb"
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8272/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      # Model load + warmup on this box takes several minutes; keep retries high
+      # so a slow start is not mistaken for a crash loop.
+      retries: 40
+      start_period: 30s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+  # TLS terminator. Browsers only allow getUserMedia on a secure origin, so a
+  # phone reaching this over http://<lan-ip> will never be offered the mic —
+  # this is what makes the page usable off the host machine.
+  r2t2-tls:
+    image: nginx:latest
+    container_name: r2t2-tls
+    restart: unless-stopped
+    profiles: ["tls"]
+    volumes:
+      - ./deploy/nginx.r2t2.conf:/etc/nginx/nginx.conf:ro
+      # Self-signed pair already used by the parent OpenLiveTranslate stack.
+      # Three levels up: repo -> transcription -> new_stuff -> OpenLiveTranslate.
+      - ../../../cert.pem:/cert.pem:ro
+      - ../../../key.pem:/key.pem:ro
+    ports:
+      - "${ASR_TLS_PORT:-1443}:1443"
