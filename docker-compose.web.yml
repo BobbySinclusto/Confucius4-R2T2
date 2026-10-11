@@ -47,13 +47,15 @@ services:
     shm_size: "4gb"
     ipc: host
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8272/health || exit 1"]
+      # wget, not curl: the base image ships wget only. /health returns 503 when
+      # the model is not ready or inference has gone stale, so a non-zero exit
+      # here means exactly "not serving".
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8272/health"]
       interval: 30s
-      timeout: 5s
-      # Model load + warmup on this box takes several minutes; keep retries high
-      # so a slow start is not mistaken for a crash loop.
-      retries: 40
-      start_period: 30s
+      timeout: 10s
+      # Generous grace: model load + warmup is ~60 s here, longer on a cold cache.
+      start_period: 300s
+      retries: 5
     deploy:
       resources:
         reservations:
