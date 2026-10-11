@@ -1,6 +1,12 @@
 # Plan — Real-time transcription website on Confucius4-R2T2
 
-Status: **approved — implementation in progress**. Decisions recorded in §4, questions resolved in §8.
+Status: **implemented and verified end-to-end (2026-10-10); handed over for manual phone testing.**
+Running now: `r2t2-web` (:8272) + `r2t2-tls` (:1443). See `README_WEB.md` for operations.
+Verified: browser mic → worklet → wss/nginx → vLLM → live text (lag 60–116 ms), `/transcript.txt`
+byte-identical to the browser, SSE watcher mode, 5993 MiB VRAM leaving ~2.1 GiB for the other GPU
+services. Long-duration endurance is deliberately not measured yet (deprioritized by you).
+
+Decisions recorded in §4, questions resolved in §8.
 
 **Primary requirement (re-prioritized by you): run unattended for 30+ minutes, ideally unbounded.**
 The old WhisperLiveKit implementation in the parent repo died after a couple of minutes; Confucius is
