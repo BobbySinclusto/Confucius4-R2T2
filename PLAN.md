@@ -1,10 +1,12 @@
 # Plan — Real-time transcription website on Confucius4-R2T2
 
 Status: **implemented and verified end-to-end (2026-10-10); handed over for manual phone testing.**
-Running now: `r2t2-web` (:8272) + `r2t2-tls` (:1443). See `README_WEB.md` for operations.
+Running now: `r2t2-web` (:8272) + `r2t2-tls` (:10102), in the parent
+`~/OpenLiveTranslate/docker-compose.yml` alongside translator + TTS. See `README_WEB.md` for operations.
 Verified: browser mic → worklet → wss/nginx → vLLM → live text (lag 60–116 ms), `/transcript.txt`
-byte-identical to the browser, SSE watcher mode, 5993 MiB VRAM leaving ~2.1 GiB for the other GPU
-services. Long-duration endurance is deliberately not measured yet (deprioritized by you).
+byte-identical to the browser, SSE watcher mode. Updated 2026-10-11 for the shared-card
+work: ASR + `hat_translator` measured at 6630 MiB of 8192 together (see the VRAM risk row).
+Long-duration endurance is deliberately not measured yet (deprioritized by you).
 
 Decisions recorded in §4, questions resolved in §8.
 
@@ -203,7 +205,7 @@ Speaker diarization (explicitly excluded), translation, audio recording/archives
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| vLLM OOM at 8 GB VRAM (`gpu_memory_utilization=0.95` hard-coded) | **High** | Env-tunable util (0.55 default) + `enforce_eager`; measured fallback ladder 0.55 → 0.45; last resort = llama.cpp GGUF route (§0, backend swap in `webapp/backend.py`) |
+| vLLM OOM at 8 GB VRAM (`gpu_memory_utilization=0.95` hard-coded) | **High** | **Resolved 2026-10-11 (2.4 GiB translator co-resident).** Three things, not one: fp8 weight-only quantization (3.80 → ~2.5 GiB), a *pinned* KV cache (`kv_cache_memory_bytes`; vLLM's "everything free" default took 1.96 GiB and OOM-killed the translator), and `depends_on: service_healthy` ordering because the ~4.9 GiB load peak exceeds the ~4.0 GiB steady state. GGUF/llama.cpp route (§0) stays as the unfetched fallback. |
 | **Disk at 97 % / 15 GB free** | **High** | No new base images; weights into `checkpoints/` (ignored by git); `docker builder prune` in the setup script; monitor `df` before `docker build` |
 | `getUserMedia` blocked on insecure origin | **High** | nginx TLS (M4); dev-only `localhost` exception noted |
 | 16 kHz resample done in JS drifts / underruns when tab is backgrounded | Medium | Worklet + jitter buffer; UI warning "keep this tab in the foreground"; wake lock |
@@ -232,6 +234,15 @@ Speaker diarization (explicitly excluded), translation, audio recording/archives
 3. **TLS** — reuse the parent repo `cert.pem`/`key.pem`.
 4. **`/transcript.txt`** — plain text; downstream parsing will be updated to match (D8).
 5. **Multi-device** — watching the same session is a nice-to-have, one publisher at a time (D9).
-6. **VRAM** — the TTS/translator services occupy **~2 GB** during the event, leaving ~5.7 GB usable on the 8 GB card. This is the tightest constraint in the project: bf16 weights alone are 4.08 GB, so `gpu_memory_utilization` must land near 0.62–0.68 with `enforce_eager=on` and a small `max_model_len`. If that does not fit alongside TTS, the fallback ladder is fp8 dynamic quantization of the ASR weights, then asking you to stop TTS during talks.
+6. **VRAM** — **solved on 2026-10-11.** Ground truth measured per container: `hat_tts`
+   is CPU-only (0 VRAM), `hat_translator` pins **2502 MiB**, so this service gets ~5.1 GiB
+   of the 7.66 GiB usable. Tuning `gpu_memory_utilization` alone could not get there — at
+   bf16 the 3.80 GiB of weights left no room for KV above the util the translator allowed,
+   and below it vLLM refused to start. What worked: **fp8 weight-only quantization** of the
+   LM linears (the audio tower + embeddings are out of reach — `Qwen3ASRAudioEncoder` takes
+   no `quant_config`), plus **pinning the KV cache** at 0.5 GiB, plus **boot ordering**
+   (online fp8 quantization peaks at ~4.9 GiB while loading, so the translator waits on our
+   healthcheck). End state 4050 + 2502 = 6630 MiB of 8192. Open follow-up if we ever need
+   the ordering gone: quantize offline to a real fp8 checkpoint so loading needs no bf16 staging.
 
 Additional context from you: the "dies after a couple of minutes" symptom was the **WhisperLiveKit** implementation in the parent repo, not Confucius. Treated as motivation, not as a baseline — I will not copy its design, and §4.5 defines what "fixed" means.

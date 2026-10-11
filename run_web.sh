@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./run_web.sh up            Build if needed, start ASR + web on :8272
-#   ./run_web.sh up --tls      Also start nginx TLS on :1443 (required for mic
+#   ./run_web.sh up --tls      Also start nginx TLS on :10102 (required for mic
 #                              access from any device that is not this host)
 #   ./run_web.sh down          Stop the stack
 #   ./run_web.sh restart       down + up, preserving TLS mode
@@ -13,7 +13,7 @@
 #   ./run_web.sh test          End-to-end self test (streams resources/test.wav)
 #
 # Environment overrides (all optional):
-#   ASR_PORT=8272  ASR_TLS_PORT=1443  ASR_GPU_MEM_UTIL=0.62  ASR_LANGUAGE=English
+#   ASR_PORT=8272  ASR_TLS_PORT=10102  ASR_QUANTIZATION=fp8  ASR_LANGUAGE=English
 #   ASR_SECRET_KEYS=test0102  VAD_USE_GPU=0
 
 set -euo pipefail
@@ -68,7 +68,7 @@ lan_url() {
     local ip
     ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     echo "http://${ip:-127.0.0.1}:${ASR_PORT:-8272}/"
-    echo "https://${ip:-127.0.0.1}:${ASR_TLS_PORT:-1443}/  (TLS, needed for phone microphones)"
+    echo "https://${ip:-127.0.0.1}:${ASR_TLS_PORT:-10102}/  (TLS, needed for phone microphones)"
     echo "http://localhost:${ASR_PORT:-8272}/transcript.txt  (plain-text endpoint)"
 }
 

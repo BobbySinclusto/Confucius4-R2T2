@@ -1,7 +1,7 @@
 # Real-time transcription web server (Confucius4-R2T2).
 #
 #   ./run_web.sh start            ASR + web page on :8272
-#   ./run_web.sh start --tls      also start nginx with TLS on :1443 (needed for
+#   ./run_web.sh start --tls      also start nginx with TLS on :10102 (needed for
 #                                 microphone access from a phone)
 #
 # Kept separate from the parent repo's docker-compose.yml so this service can be
@@ -21,18 +21,36 @@ services:
     environment:
       ASR_MODEL_PATH: /work/checkpoints/Confucius4-R2T2
       VAD_MODEL_PATH: /work/checkpoints/vad/Stream-VAD
-      # Memory envelope on an 8 GB card. bf16 weights are 3.8 GiB, and vLLM also
-      # needs room for its profiling peak plus KV cache; 0.62 crashed with
-      # "No available memory for the cache blocks", so the batch/model length
-      # caps below are what buy the headroom rather than raising the ceiling.
-      # NOTE: the TTS/translator stack wants ~2 GB here too, which does not fit
-      # alongside 0.72 — see PLAN.md risk table (fp8 quantization is the lever).
-      ASR_GPU_MEM_UTIL: "${ASR_GPU_MEM_UTIL:-0.72}"
+      # Memory envelope for an 8 GB card shared with hat_translator (2.4 GiB;
+      # hat_tts is CPU-only). Three separate things had to give, and the numbers
+      # below are measured with all of them up:
+      #   1. gpu_memory_utilization is a fraction of the *whole* card, not of what
+      #      is free, and the engine refuses to start unless free >= util*total.
+      #   2. bf16 weights are 3.80 GiB, leaving nothing for KV -> fp8 quantization.
+      #   3. vLLM's default KV reservation is "all the rest" (it took 1.96 GiB /
+      #      18,288 tokens for a workload needing ~1k) -> pin it. Steady state with
+      #      traffic is ~4.0 GiB, so 4.0 + 2.4 = 6.4 of 7.8 usable.
+      # See the boot-order note at the bottom: loading still needs more than the
+      # steady state, so this service must come up *before* hat_translator.
+      ASR_GPU_MEM_UTIL: "${ASR_GPU_MEM_UTIL:-0.55}"
       ASR_MAX_MODEL_LEN: "${ASR_MAX_MODEL_LEN:-1024}"
       ASR_MAX_NUM_BATCHED_TOKENS: "${ASR_MAX_NUM_BATCHED_TOKENS:-1024}"
       ASR_SKIP_MM_PROFILING: "${ASR_SKIP_MM_PROFILING:-1}"
       ASR_ENFORCE_EAGER: "${ASR_ENFORCE_EAGER:-1}"
       ASR_MM_CACHE_GB: "${ASR_MM_CACHE_GB:-0}"
+      ASR_MAX_NUM_SEQS: "${ASR_MAX_NUM_SEQS:-4}"
+      # Pin the KV cache instead of letting vLLM take everything gpu_memory_utilization
+      # leaves free -- that greedy default is what OOM-killed hat_translator. 0.5 GiB
+      # is ~4.6k tokens at 112 KiB/token; a stream needs ~1k. Set 0 to restore vLLM's
+      # "use what's left" behaviour (only safe on an otherwise-idle card).
+      ASR_KV_CACHE_GB: "${ASR_KV_CACHE_GB:-0.5}"
+      # fp8 weight-only (Marlin) on the LM linears: 3.80 GiB of weights -> ~2.5 GiB.
+      # Quantized in memory at load from the bf16 checkpoint, so nothing on disk
+      # changes; set empty to go back to full bf16 when the card is not shared
+      # (ASR_QUANTIZATION= ./run_web.sh up). No colon on the substitution so an
+      # explicitly-empty value means "no quantization" rather than falling back
+      # to the default.
+      ASR_QUANTIZATION: "${ASR_QUANTIZATION-fp8}"
       VAD_USE_GPU: "${VAD_USE_GPU:-0}"
       ASR_LANGUAGE: "${ASR_LANGUAGE:-English}"
       ASR_MODE: "${ASR_MODE:-slow}"
@@ -76,5 +94,7 @@ services:
       # Three levels up: repo -> transcription -> new_stuff -> OpenLiveTranslate.
       - ../../../cert.pem:/cert.pem:ro
       - ../../../key.pem:/key.pem:ro
-    ports:
-      - "${ASR_TLS_PORT:-1443}:1443"
+    # Host networking, matching how the stack runs in the parent compose: nginx
+    # binds the port in nginx.r2t2.conf (:10102) directly, so there is no mapping
+    # here and ASR_TLS_PORT only affects the URL ./run_web.sh prints.
+    network_mode: host

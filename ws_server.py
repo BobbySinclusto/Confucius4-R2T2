@@ -312,20 +312,29 @@ async def initialize_models(app):
 
     # Streaming is vLLM-only and no forced aligner supported.
     # vLLM knobs come from the environment. This box is an 8 GB RTX 3070 shared
-    # with ~2 GB of other services during an event, so the hard-coded 0.95 that
-    # used to live here (7.6 GB) cannot fit. R2T2ASRModel.LLM inherits
-    # Qwen3ASRModel.LLM, whose **kwargs go straight to vllm.LLM(model=..., **kwargs),
-    # so these are ordinary vLLM engine options.
+    # with the translator container, which pins ~2.4 GiB (hat_tts is CPU-only),
+    # leaving us ~5.1 GiB. R2T2ASRModel.LLM inherits Qwen3ASRModel.LLM, whose
+    # **kwargs go straight to vllm.LLM(model=..., **kwargs), so these are ordinary
+    # vLLM engine options.
+    #
+    # gpu_memory_utilization is a fraction of the *whole* card, not of what is
+    # free, and the engine refuses to start unless free_memory >= util * total
+    # (with the translator up that caps us near 0.65). It is also an upper bound
+    # on what we may take, so keep it above the explicit KV reservation below but
+    # well clear of the translator's 2.4 GiB.
     # Streaming feeds a 16 s audio window, so a prompt is only a few hundred
-    # tokens; capping the model/batch length keeps vLLM's profiling peak (and
-    # therefore its KV reservation) small enough to share an 8 GB card.
+    # tokens; the model/batch caps below are sized to that rather than to a
+    # generic worst case, which is what keeps both the KV reservation and the
+    # per-chunk work small enough to share an 8 GB card.
     llm_kwargs = {
-        "gpu_memory_utilization": float(os.environ.get("ASR_GPU_MEM_UTIL", "0.72")),
+        "gpu_memory_utilization": float(os.environ.get("ASR_GPU_MEM_UTIL", "0.55")),
         # A streaming prompt is one ~16 s audio window. Qwen3-ASR consumes 1280
         # samples per token (12.5 tok/s), so 16 s of audio is ~200 tokens plus a
         # few dozen of text prefix — 1024 is generous, and every token of head-
         # room here costs KV cache we do not have on a shared 8 GB card.
         "max_model_len": int(os.environ.get("ASR_MAX_MODEL_LEN", "1024")),
+        # (With ASR_KV_CACHE_GB set, below, vLLM skips memory profiling entirely,
+        # so these caps bound real work rather than buying headroom.)
         "max_num_batched_tokens": int(os.environ.get("ASR_MAX_NUM_BATCHED_TOKENS", "1024")),
         # vLLM otherwise reserves memory for a worst-case multimodal input; our
         # audio window is bounded far below that.
@@ -337,7 +346,33 @@ async def initialize_models(app):
         # CUDA graphs cost ~0.5-1 GB of VRAM for a ~1 s gain in per-chunk cost;
         # on a shared 8 GB card eager mode is the safer default.
         "enforce_eager": os.environ.get("ASR_ENFORCE_EAGER", "1") == "1",
+        # One speaker per page, so a wide continuous-batching window only buys
+        # bookkeeping buffers. Keeps the scheduler's working set small.
+        "max_num_seqs": int(os.environ.get("ASR_MAX_NUM_SEQS", "4")),
     }
+    # Size the KV cache explicitly instead of letting vLLM take "whatever is still
+    # free" under gpu_memory_utilization. On a shared card that default is exactly
+    # what starves the neighbour: it reserved 1.96 GiB / 18,288 tokens here, while
+    # a streaming prompt is ~250 audio tokens x ASR_MAX_NUM_SEQS, i.e. ~1k tokens
+    # (~110 MiB). Pinning it makes our footprint predictable instead of greedy.
+    kv_cache_gb = float(os.environ.get("ASR_KV_CACHE_GB", "0.5"))
+    if kv_cache_gb > 0:
+        llm_kwargs["kv_cache_memory_bytes"] = int(kv_cache_gb * 1024**3)
+    # fp8 weight-only quantization: the 2.6 GiB of LM linear layers is the only
+    # part of the checkpoint vLLM can shrink (Qwen3ASRAudioEncoder takes no
+    # quant_config, so the 0.56 GiB audio tower, and the 0.58 GiB embedding
+    # table, stay bf16). On this Ampere card (cc 8.6) vLLM has no fp8 tensor
+    # cores, so it uses the Marlin weight-only kernel: weights are stored as
+    # fp8_e4m3 and dequantized to bf16 per layer, which halves LM weight bytes
+    # while activations/math stay bf16.
+    #
+    # This is *online* quantization of the bf16 checkpoint -- no new weights file
+    # is written, so it costs a one-off pass over the safetensors at load time
+    # and the saved weights are untouched. Set ASR_QUANTIZATION= (empty) to run
+    # full bf16 when the card is otherwise idle.
+    quantization = os.environ.get("ASR_QUANTIZATION", "fp8").strip()
+    if quantization:
+        llm_kwargs["quantization"] = quantization
     logger.info(f"vLLM engine kwargs: {llm_kwargs}")
     asr_model =  R2T2ASRModel.LLM(
         model=args.asr_model_path,
